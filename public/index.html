@@ -219,6 +219,10 @@
         <div><h2 style="margin:0" id="testTitle">Test</h2><div class="status" id="testProgress"></div></div>
         <div><button class="primary" id="evalBtn">Vyhodnotit</button> <button id="restartBtn">Znovu</button></div>
       </div>
+      <label style="display:flex; gap:8px; align-items:center; margin-top:10px; font-size:0.9rem; color:var(--text)">
+        <input type="checkbox" id="aiGrade" checked style="width:auto"> Otevřené odpovědi nechat ohodnotit AI (jeden požadavek navíc)
+        <span class="status" id="aiGradeStatus"></span>
+      </label>
       <div id="result" hidden style="margin-top:12px">
         <div class="score" id="scoreText"></div>
         <div class="bar"><div id="scoreBar" style="width:0"></div></div>
@@ -447,13 +451,13 @@ function avoidBlock(p) {
 
 const SYSTEM_PROMPT = 'Jsi zkušený učitel a autor testů. Odpovídáš pouze JSON.';
 
-async function callApi(prompt) {
+async function callApi(prompt, system = SYSTEM_PROMPT) {
   const cfg = PROVIDERS[providerEl.value];
-  if (cfg.api === 'gemini') return callGemini(cfg, prompt);
+  if (cfg.api === 'gemini') return callGemini(cfg, prompt, system);
   const body = {
     model: modelEl.value,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: system },
       { role: 'user', content: prompt },
     ],
     temperature: 1.0,
@@ -475,9 +479,9 @@ async function callApi(prompt) {
 }
 
 // nativní Gemini API (generateContent)
-async function callGemini(cfg, prompt) {
+async function callGemini(cfg, prompt, system = SYSTEM_PROMPT) {
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { temperature: 1.0, responseMimeType: 'application/json' },
   };
@@ -664,13 +668,29 @@ function updateProgress() {
   const done = answers.filter(a => a !== null).length;
   $('testProgress').textContent = `Zodpovězeno ${done} / ${answers.length}`;
 }
-function evaluate() {
+// AI ohodnotí otevřené odpovědi (jedním požadavkem). Vrací mapu index -> {correct, comment}.
+async function gradeOpenByAi(items) {
+  const prompt = `Ohodnoť odpovědi žáka na otevřené otázky. Odpověď je správná, pokud věcně odpovídá vzorové odpovědi – jiná formulace, překlepy, pořadí slov ani zkratky nevadí; chybějící podstatná část, jiné jméno/rok nebo prázdná odpověď = špatně.
+Odpověz POUZE JSON ve tvaru {"results":[{"i":0,"correct":true,"comment":"krátké zdůvodnění pro žáka (max 1 věta)"}]}.
+
+${items.map(it => `Otázka ${it.i}: ${it.question}\nVzorová odpověď: ${it.answer}\nOdpověď žáka: ${it.student || '(bez odpovědi)'}`).join('\n\n')}`;
+  const text = await callApi(prompt, 'Jsi spravedlivý učitel, který opravuje test. Odpovídáš pouze JSON.');
+  let sdata = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  const a = sdata.indexOf('{'), b = sdata.lastIndexOf('}');
+  if (a >= 0 && b > a) sdata = sdata.slice(a, b + 1);
+  const out = {};
+  for (const r of (JSON.parse(sdata).results || [])) out[r.i] = { correct: !!r.correct, comment: String(r.comment || '') };
+  return out;
+}
+
+async function evaluate() {
   if (graded) return;
   const unanswered = answers.filter(a => a === null).length;
   if (unanswered && !confirm(`Nezodpovězených otázek: ${unanswered}. Přesto vyhodnotit?`)) return;
   graded = true; $('evalBtn').disabled = true;
   let auto = 0, autoTotal = 0, openTotal = 0;
   const openChecks = [];
+  const openItems = [];
   current.questions.forEach((q, i) => {
     const d = document.querySelector(`#testOut .q[data-i="${i}"]`);
     const v = d.querySelector('.verdict');
@@ -692,13 +712,33 @@ function evaluate() {
       openTotal++;
       d.querySelector('textarea').disabled = true;
       v.className = 'verdict';
-      v.innerHTML = `Porovnej se vzorovou odpovědí a označ: <label class="opt" style="display:inline-flex"><input type="checkbox" class="selfok"> <span>Měl/a jsem to správně</span></label>`;
+      v.innerHTML = `<span class="aiv"></span>Porovnej se vzorovou odpovědí a označ: <label class="opt" style="display:inline-flex"><input type="checkbox" class="selfok"> <span>Měl/a jsem to správně</span></label><div class="expl aic"></div>`;
       const cb = v.querySelector('.selfok');
       openChecks.push(cb);
+      openItems.push({ i, question: q.question, answer: q.answer, student: answers[i] || '' });
       cb.addEventListener('change', () => { d.classList.toggle('ok', cb.checked); d.classList.toggle('bad', !cb.checked); showScore(); });
       d.classList.add('bad');
     }
   });
+  showScore();
+  $('testHead').scrollIntoView({ behavior: 'smooth' });
+  // otevřené odpovědi nechat ohodnotit AI; žák může výsledek přepnout
+  if (openItems.length && $('aiGrade').checked) {
+    const st = $('aiGradeStatus'); st.className = 'status'; st.textContent = 'AI hodnotí otevřené odpovědi…';
+    try {
+      const res = await gradeOpenByAi(openItems);
+      for (const it of openItems) {
+        const r = res[it.i]; if (!r) continue;
+        const d = document.querySelector(`#testOut .q[data-i="${it.i}"]`);
+        const cb = d.querySelector('.selfok');
+        cb.checked = r.correct; d.classList.toggle('ok', r.correct); d.classList.toggle('bad', !r.correct);
+        d.querySelector('.aiv').innerHTML = r.correct ? '<span class="verdict ok">✔ AI: správně</span> · ' : '<span class="verdict bad">✘ AI: špatně</span> · ';
+        d.querySelector('.aic').textContent = r.comment;
+      }
+      showScore();
+      st.textContent = 'Otevřené odpovědi ohodnotila AI – můžeš je přepnout, když nesouhlasíš.';
+    } catch (e) { st.className = 'status err'; st.textContent = 'AI hodnocení se nepovedlo (' + e.message.split('\n')[0].slice(0, 80) + ') – ohodnoť se sám/sama.'; }
+  }
   function showScore() {
     const selfOk = openChecks.filter(c => c.checked).length;
     const total = autoTotal + openTotal, score = auto + selfOk;
@@ -706,11 +746,9 @@ function evaluate() {
     $('scoreText').textContent = `Výsledek: ${score} / ${total} (${pct} %)`;
     $('scoreBar').style.width = pct + '%';
     $('scoreBar').style.background = pct >= 75 ? 'var(--ok)' : pct >= 50 ? '#f59e0b' : 'var(--err)';
-    $('scoreNote').textContent = openTotal ? `Automaticky: ${auto}/${autoTotal}, otevřené (sebehodnocení): ${selfOk}/${openTotal}.` : '';
+    $('scoreNote').textContent = openTotal ? `Uzavřené: ${auto}/${autoTotal}, otevřené: ${selfOk}/${openTotal}.` : '';
     $('result').hidden = false;
   }
-  showScore();
-  $('testHead').scrollIntoView({ behavior: 'smooth' });
 }
 $('startTest').addEventListener('click', startTest);
 $('evalBtn').addEventListener('click', evaluate);
