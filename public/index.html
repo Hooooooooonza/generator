@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generátor otázek</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1c1e21; --muted: #6b7280;
+    --border: #e2e5ea; --accent: #2563eb; --accent-text: #fff; --ok: #16a34a; --err: #dc2626;
+    --answer-bg: #f0fdf4; --ok-bg: #dcfce7; --err-bg: #fee2e2; --sel-bg: #dbeafe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111316; --card: #1b1e23; --text: #e6e8eb; --muted: #9aa1ab;
+      --border: #2c3138; --accent: #3b82f6; --ok: #4ade80; --err: #f87171;
+      --answer-bg: #14261a; --ok-bg: #14361f; --err-bg: #3b1a1a; --sel-bg: #1e2f4d;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 1.6rem; margin: 0 0 16px; }
+  h2 { font-size: 1.1rem; margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  textarea { min-height: 60px; resize: vertical; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button { padding: 9px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.small { padding: 5px 10px; font-size: 0.85rem; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .hint a { color: var(--accent); }
+  .status { font-size: 0.9rem; color: var(--muted); }
+  .status.err { color: var(--err); white-space: pre-wrap; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button { border-radius: 999px; }
+  .tabs button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .q { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .q .num { color: var(--muted); font-size: 0.8rem; }
+  .q .text { font-weight: 600; margin: 4px 0 10px; }
+  .q ol { margin: 0 0 10px; padding-left: 22px; }
+  .q ol li { margin: 3px 0; }
+  .q .answer { display: none; background: var(--answer-bg); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+  .q.show .answer { display: block; }
+  .q .answer b { color: var(--ok); }
+  .q .expl { font-size: 0.9rem; color: var(--muted); margin-top: 4px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0 16px; }
+  /* test */
+  .opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; cursor: pointer; }
+  .opt input { width: auto; margin-top: 4px; }
+  .opt.selected { background: var(--sel-bg); border-color: var(--accent); }
+  .opt.correct { background: var(--ok-bg); border-color: var(--ok); }
+  .opt.wrong { background: var(--err-bg); border-color: var(--err); }
+  .q.graded.ok { border-color: var(--ok); }
+  .q.graded.bad { border-color: var(--err); }
+  .verdict { font-weight: 600; margin-top: 8px; }
+  .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--err); }
+  .score { font-size: 1.4rem; font-weight: 700; }
+  .bar { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin: 8px 0; }
+  .bar > div { height: 100%; background: var(--ok); }
+  /* knihovna */
+  .set { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .set:last-child { border-bottom: 0; }
+  .set .meta { font-size: 0.8rem; color: var(--muted); }
+  @media print {
+    body { background: #fff; color: #000; }
+    .noprint { display: none !important; }
+    .q { break-inside: avoid; border: 1px solid #ccc; }
+    .q .answer { display: block !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Generátor otázek</h1>
+
+  <div class="tabs noprint">
+    <button data-tab="gen" class="active">Generovat</button>
+    <button data-tab="lib" id="tabLib" hidden>Sdílená zadání</button>
+    <button data-tab="view" id="tabView" hidden>Otázky</button>
+    <button data-tab="test" id="tabTest" hidden>Test</button>
+  </div>
+
+  <!-- ===== GENEROVÁNÍ ===== -->
+  <section data-panel="gen">
+    <details class="card noprint" id="setup">
+      <summary>Nastavení API</summary>
+      <div class="grid" style="margin-top:12px">
+        <div>
+          <label for="provider">Poskytovatel (free tier)</label>
+          <select id="provider">
+            <option value="gemini">Google Gemini</option>
+            <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter (:free modely)</option>
+          </select>
+        </div>
+        <div id="keywrap">
+          <label for="apikey">API klíč</label>
+          <input id="apikey" type="password" placeholder="vlož klíč…" autocomplete="off">
+        </div>
+        <div>
+          <label for="model">Model</label>
+          <select id="model"></select>
+        </div>
+      </div>
+      <div class="hint" id="keyhint"></div>
+      <div class="row">
+        <button id="loadModels">Načíst seznam modelů</button>
+        <span class="status" id="setupStatus"></span>
+      </div>
+    </details>
+
+    <div class="card noprint">
+      <div class="grid">
+        <div class="full">
+          <label for="topic">Téma / učivo</label>
+          <input id="topic" placeholder="např. Fotosyntéza, 7. ročník">
+        </div>
+        <div>
+          <label for="count">Počet otázek</label>
+          <input id="count" type="number" min="1" max="30" value="10">
+        </div>
+        <div>
+          <label for="qtype">Typ otázek</label>
+          <select id="qtype">
+            <option value="abcd">Výběr z možností (A–D)</option>
+            <option value="open">Otevřené</option>
+            <option value="tf">Pravda / nepravda</option>
+            <option value="mix">Mix</option>
+          </select>
+        </div>
+        <div>
+          <label for="difficulty">Obtížnost</label>
+          <select id="difficulty">
+            <option>lehká</option>
+            <option selected>střední</option>
+            <option>těžká</option>
+          </select>
+        </div>
+        <div class="full">
+          <label for="extra">Doplňující pokyny (volitelné)</label>
+          <textarea id="extra" placeholder="např. Zaměř se na rovnici fotosyntézy a roli chlorofylu. Nepoužívej cizí slova."></textarea>
+        </div>
+        <div class="full">
+          <label for="source">Zdrojový text (volitelné – otázky se budou držet tohoto textu)</label>
+          <textarea id="source" placeholder="Sem můžeš vložit text z učebnice…" style="min-height:80px"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary" id="gen">Vygenerovat otázky</button>
+        <button id="shareBtn" hidden>Uložit zadání do sdílených</button>
+        <span class="status" id="status"></span>
+      </div>
+      <div id="shareForm" class="grid" hidden style="margin-top:12px">
+        <div><label for="shareTitle">Název zadání</label><input id="shareTitle" placeholder="např. Fotosyntéza – opakování"></div>
+        <div><label for="shareAuthor">Tvoje jméno</label><input id="shareAuthor" placeholder="např. Honza"></div>
+        <div style="align-self:end"><button class="primary" id="shareSave">Uložit</button> <span class="status" id="shareStatus"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SDÍLENÁ ZADÁNÍ ===== -->
+  <section data-panel="lib" hidden>
+    <div class="card">
+      <div class="row" style="margin-top:0; justify-content:space-between">
+        <div><h2 style="margin:0">Sdílená zadání</h2><div class="status">Zadání pro AI sdílí všichni; otázky si každý generuje sám.</div></div>
+        <button class="small" id="refreshLib">Obnovit</button>
+      </div>
+      <div id="libList" style="margin-top:8px"><span class="status">Načítám…</span></div>
+    </div>
+  </section>
+
+  <!-- ===== ZOBRAZENÍ OTÁZEK ===== -->
+  <section data-panel="view" hidden>
+    <div class="card noprint">
+      <div class="row" style="margin-top:0">
+        <div style="flex:1"><h2 style="margin:0" id="setTitle">Otázky</h2><div class="status" id="setMeta"></div></div>
+      </div>
+      <div class="toolbar" style="margin-bottom:0">
+        <button class="primary" id="startTest">Spustit test</button>
+        <button id="toggleAll">Zobrazit / skrýt odpovědi</button>
+        <button id="copyText">Kopírovat text</button>
+        <button id="copyJson">Kopírovat JSON</button>
+        <button onclick="window.print()">Tisk</button>
+      </div>
+    </div>
+    <div id="out"></div>
+  </section>
+
+  <!-- ===== TEST ===== -->
+  <section data-panel="test" hidden>
+    <div class="card noprint" id="testHead">
+      <div class="row" style="margin-top:0; justify-content:space-between">
+        <div><h2 style="margin:0" id="testTitle">Test</h2><div class="status" id="testProgress"></div></div>
+        <div><button class="primary" id="evalBtn">Vyhodnotit</button> <button id="restartBtn">Znovu</button></div>
+      </div>
+      <div id="result" hidden style="margin-top:12px">
+        <div class="score" id="scoreText"></div>
+        <div class="bar"><div id="scoreBar" style="width:0"></div></div>
+        <div class="status" id="scoreNote"></div>
+      </div>
+    </div>
+    <div id="testOut"></div>
+  </section>
+</div>
+
+<script>
+// ============================================================
+//  NASTAVENÍ – tady vlož své klíče, když stránku dáváš třídě.
+//  Klíče vložené sem uvidí každý, kdo si otevře zdroják stránky
+//  (je to free tier, takže nejhorší, co se může stát, je vyčerpaný denní limit).
+//  Můžeš jich dát víc (třeba ze 3 Google účtů) – stránka je střídá:
+//  každý návštěvník začne na náhodném klíči, a když dostane 429 (limit),
+//  automaticky zkusí další.
+// ============================================================
+const CONFIG = {
+  provider: 'gemini',                 // 'gemini' | 'groq' | 'openrouter'
+  apiKeys: [                          // prázdné = uživatel zadá vlastní klíč
+    // 'AIzaSy…první',
+    // 'AIzaSy…druhý',
+    // 'AIzaSy…třetí',
+  ],
+  model: 'gemini-3-flash-preview',    // výchozí model
+  lockSettings: false,                // true = skrýt nastavení API úplně (pro žáky)
+};
+
+const PROVIDERS = {
+  gemini: {
+    name: 'Google Gemini',
+    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaults: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    filter: id => /gemini/.test(id) && !/embedding|tts|image|audio|live|native/.test(id),
+    hint: 'Klíč zdarma: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> (free tier ~10 req/min, ~250/den; bez karty).',
+  },
+  groq: {
+    name: 'Groq',
+    base: 'https://api.groq.com/openai/v1',
+    defaults: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct'],
+    filter: id => !/whisper|guard|tts|orpheus|safeguard|compound/.test(id),
+    hint: 'Klíč zdarma: <a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a> (free tier ~30 req/min, bez karty).',
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    base: 'https://openrouter.ai/api/v1',
+    defaults: ['google/gemma-4-31b-it:free', 'z-ai/glm-5.2:free', 'nvidia/nemotron-3-ultra-550b-a55b:free'],
+    filter: id => id.endsWith(':free'),
+    hint: 'Klíč: <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> – modely s příponou <code>:free</code> jsou zdarma (limit ~50 req/den bez kreditu).',
+  },
+};
+
+const $ = id => document.getElementById(id);
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const TYPE_LABEL = { abcd: 'výběr', open: 'otevřená', tf: 'pravda/nepravda' };
+const QTYPE_LABEL = { abcd: 'A–D', open: 'otevřené', tf: 'pravda/nepravda', mix: 'mix' };
+
+const providerEl = $('provider'), keyEl = $('apikey'), modelEl = $('model');
+const builtinKeys = CONFIG.apiKeys.map(k => String(k).trim()).filter(Boolean);
+let current = { title: 'Otázky', questions: [] };
+
+// ---------- záložky ----------
+function showTab(name) {
+  document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== name);
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+}
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+// ---------- nastavení API ----------
+function usingBuiltinKeys() { return builtinKeys.length > 0 && providerEl.value === CONFIG.provider; }
+function applyProvider() {
+  const p = providerEl.value, cfg = PROVIDERS[p];
+  $('keywrap').hidden = usingBuiltinKeys();
+  keyEl.value = store.get('qg_key_' + p) || '';
+  $('keyhint').innerHTML = usingBuiltinKeys()
+    ? `Klíč je nastavený přímo ve stránce (${builtinKeys.length} ${builtinKeys.length === 1 ? 'klíč' : 'klíče'}, střídají se automaticky).`
+    : cfg.hint + ' Klíč zůstává jen v tomto prohlížeči (localStorage).';
+  const saved = store.get('qg_models_' + p);
+  const list = saved ? JSON.parse(saved) : cfg.defaults.slice();
+  const preferred = store.get('qg_model_' + p) || (p === CONFIG.provider ? CONFIG.model : null);
+  if (preferred && !list.includes(preferred)) list.unshift(preferred);
+  fillModels(list, preferred);
+  store.set('qg_provider', p);
+}
+function fillModels(list, selected) {
+  modelEl.innerHTML = '';
+  for (const id of list) { const o = document.createElement('option'); o.value = o.textContent = id; modelEl.appendChild(o); }
+  if (selected && list.includes(selected)) modelEl.value = selected;
+}
+providerEl.addEventListener('change', applyProvider);
+keyEl.addEventListener('change', () => store.set('qg_key_' + providerEl.value, keyEl.value.trim()));
+modelEl.addEventListener('change', () => store.set('qg_model_' + providerEl.value, modelEl.value));
+
+// Sada klíčů pro aktuálního poskytovatele. Začíná se na náhodném (rozloží zátěž
+// mezi návštěvníky) a po úspěchu se u něj zůstává; při 429 se přejde na další.
+let keyIdx = Math.floor(Math.random() * 1000);
+function keyPool() {
+  if (usingBuiltinKeys()) return builtinKeys;
+  const key = keyEl.value.trim();
+  if (!key) throw new Error('Chybí API klíč.');
+  return [key];
+}
+const headersFor = key => ({ 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' });
+
+// Provede požadavek; při 429/503 zkusí postupně všechny klíče.
+async function fetchWithRotation(url, init) {
+  const keys = keyPool();
+  let last = null;
+  for (let i = 0; i < keys.length; i++) {
+    const idx = (keyIdx + i) % keys.length;
+    const r = await fetch(url, { ...init, headers: headersFor(keys[idx]) });
+    if (r.status !== 429 && r.status !== 503) { keyIdx = idx; return r; }
+    last = r;
+    if (keys.length > 1) console.warn(`Klíč #${idx + 1} vrátil ${r.status}, zkouším další…`);
+  }
+  return last;
+}
+
+$('loadModels').addEventListener('click', async () => {
+  const p = providerEl.value, cfg = PROVIDERS[p], st = $('setupStatus');
+  st.className = 'status'; st.textContent = 'Načítám…';
+  try {
+    const r = await fetchWithRotation(cfg.base + '/models', {});
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    const ids = (data.data || []).map(m => m.id.replace(/^models\//, '')).filter(cfg.filter).sort();
+    if (!ids.length) throw new Error('Seznam je prázdný.');
+    store.set('qg_models_' + p, JSON.stringify(ids));
+    fillModels(ids, ids.includes(modelEl.value) ? modelEl.value : (cfg.defaults.find(d => ids.includes(d)) || ids[0]));
+    st.textContent = `Načteno ${ids.length} modelů.`;
+  } catch (e) { st.className = 'status err'; st.textContent = 'Chyba: ' + e.message; }
+});
+
+// ---------- zadání (parametry generování) ----------
+function getParams() {
+  return {
+    topic: $('topic').value.trim(),
+    count: Math.max(1, Math.min(30, +$('count').value || 10)),
+    qtype: $('qtype').value,
+    difficulty: $('difficulty').value,
+    extra: $('extra').value.trim(),
+    source: $('source').value.trim(),
+  };
+}
+function setParams(p) {
+  $('topic').value = p.topic || '';
+  $('count').value = p.count || 10;
+  $('qtype').value = p.qtype || 'abcd';
+  $('difficulty').value = p.difficulty || 'střední';
+  $('extra').value = p.extra || '';
+  $('source').value = p.source || '';
+}
+
+function buildPrompt(p) {
+  const typeText = {
+    abcd: 'všechny otázky typu "abcd" (4 možnosti, právě jedna správná)',
+    open: 'všechny otázky typu "open" (otevřená otázka s krátkou vzorovou odpovědí)',
+    tf: 'všechny otázky typu "tf" (tvrzení, odpověď "Pravda" nebo "Nepravda")',
+    mix: 'mix typů "abcd", "open" a "tf"',
+  }[p.qtype];
+  return `Vytvoř ${p.count} otázek v češtině na téma: ${p.topic || '(obecné)'}.
+Obtížnost: ${p.difficulty}. Formát: ${typeText}.
+${p.extra ? 'Doplňující pokyny: ' + p.extra + '\n' : ''}${p.source ? 'Otázky vycházejí VÝHRADNĚ z tohoto textu:\n"""\n' + p.source + '\n"""\n' : ''}
+Odpověz POUZE validním JSON objektem bez komentářů, ve tvaru:
+{"questions":[
+ {"type":"abcd","question":"…","options":["…","…","…","…"],"answer":"B","explanation":"…"},
+ {"type":"open","question":"…","answer":"vzorová odpověď","explanation":"…"},
+ {"type":"tf","question":"tvrzení…","answer":"Pravda","explanation":"…"}
+]}
+U "abcd" je "answer" písmeno A–D. Otázky ať jsou věcně správné, jednoznačné a různorodé.`;
+}
+
+async function callApi(prompt) {
+  const cfg = PROVIDERS[providerEl.value];
+  const body = {
+    model: modelEl.value,
+    messages: [
+      { role: 'system', content: 'Jsi zkušený učitel a autor testů. Odpovídáš pouze JSON.' },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.7,
+    response_format: { type: 'json_object' },
+  };
+  const url = cfg.base + '/chat/completions';
+  let r = await fetchWithRotation(url, { method: 'POST', body: JSON.stringify(body) });
+  if (r.status === 400) { // model bez JSON módu – zkus bez něj
+    delete body.response_format;
+    r = await fetchWithRotation(url, { method: 'POST', body: JSON.stringify(body) });
+  }
+  if (!r.ok) {
+    const t = await r.text();
+    if (r.status === 429) throw new Error(`Překročen limit požadavků (429)${keyPool().length > 1 ? ' u všech klíčů' : ''}. Chvíli počkej nebo zkus jiný model.\n` + t.slice(0, 300));
+    throw new Error(`HTTP ${r.status}: ${t.slice(0, 500)}`);
+  }
+  const data = await r.json();
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+function parseQuestions(text) {
+  let s = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a) s = s.slice(a, b + 1);
+  const obj = JSON.parse(s);
+  const qs = Array.isArray(obj) ? obj : obj.questions;
+  if (!Array.isArray(qs) || !qs.length) throw new Error('Model nevrátil žádné otázky.');
+  // normalizace: answer u abcd vždy jedno velké písmeno, u tf "Pravda"/"Nepravda"
+  return qs.map(q => {
+    q = { ...q };
+    if (q.type === 'abcd') q.answer = String(q.answer || '').trim().toUpperCase().charAt(0);
+    if (q.type === 'tf') q.answer = /^(ne|false|n)/i.test(String(q.answer).trim()) ? 'Nepravda' : 'Pravda';
+    return q;
+  });
+}
+
+async function generate() {
+  const st = $('status'), btn = $('gen'), p = getParams();
+  st.className = 'status'; st.textContent = 'Generuji… (' + modelEl.value + ')';
+  btn.disabled = true;
+  try {
+    const qs = parseQuestions(await callApi(buildPrompt(p)));
+    loadSet({ title: p.topic || 'Otázky', questions: qs });
+    st.textContent = `Hotovo – ${qs.length} otázek.`;
+    return true;
+  } catch (e) { st.className = 'status err'; st.textContent = 'Chyba: ' + e.message; showTab('gen'); return false; }
+  finally { btn.disabled = false; }
+}
+$('gen').addEventListener('click', generate);
+
+// ---------- zobrazení sady ----------
+function loadSet(set) {
+  current = set;
+  $('setTitle').textContent = set.title;
+  $('setMeta').textContent = set.questions.length + ' otázek';
+  render();
+  $('tabView').hidden = false; $('tabTest').hidden = false;
+  showTab('view');
+}
+function render() {
+  const out = $('out'); out.innerHTML = '';
+  current.questions.forEach((q, i) => {
+    const d = document.createElement('div'); d.className = 'q';
+    let html = `<div class="num">Otázka ${i + 1} · ${TYPE_LABEL[q.type] || q.type}</div><div class="text">${esc(q.question)}</div>`;
+    if (q.type === 'abcd' && Array.isArray(q.options)) html += '<ol type="A">' + q.options.map(o => `<li>${esc(o)}</li>`).join('') + '</ol>';
+    html += `<button class="noprint small reveal">Odpověď</button>
+      <div class="answer"><b>Správně: ${esc(q.answer)}</b>${q.explanation ? `<div class="expl">${esc(q.explanation)}</div>` : ''}</div>`;
+    d.innerHTML = html;
+    d.querySelector('.reveal').addEventListener('click', () => d.classList.toggle('show'));
+    out.appendChild(d);
+  });
+}
+$('toggleAll').addEventListener('click', () => {
+  const all = [...document.querySelectorAll('#out .q')];
+  const show = !all.every(q => q.classList.contains('show'));
+  all.forEach(q => q.classList.toggle('show', show));
+});
+function asText() {
+  return current.questions.map((q, i) => {
+    let t = `${i + 1}. ${q.question}\n`;
+    if (q.type === 'abcd' && q.options) t += q.options.map((o, j) => `   ${'ABCD'[j]}) ${o}`).join('\n') + '\n';
+    t += `   Odpověď: ${q.answer}` + (q.explanation ? ` (${q.explanation})` : '');
+    return t;
+  }).join('\n\n');
+}
+$('copyText').addEventListener('click', () => navigator.clipboard.writeText(asText()).then(() => $('setMeta').textContent = 'Zkopírováno jako text.'));
+$('copyJson').addEventListener('click', () => navigator.clipboard.writeText(JSON.stringify(current.questions, null, 2)).then(() => $('setMeta').textContent = 'Zkopírován JSON.'));
+
+// ---------- sdílená zadání (Netlify Functions + Blobs) ----------
+let libAvailable = false;
+async function detectLibrary() {
+  if (location.protocol === 'file:') return;
+  try {
+    const r = await fetch('/api/prompts', { headers: { accept: 'application/json' } });
+    if (r.ok && (r.headers.get('content-type') || '').includes('json')) {
+      libAvailable = true; $('tabLib').hidden = false; $('shareBtn').hidden = false;
+      renderLibrary(await r.json());
+    }
+  } catch {}
+}
+async function refreshLibrary() {
+  $('libList').innerHTML = '<span class="status">Načítám…</span>';
+  try { renderLibrary(await (await fetch('/api/prompts')).json()); }
+  catch (e) { $('libList').innerHTML = `<span class="status err">Chyba: ${esc(e.message)}</span>`; }
+}
+function renderLibrary(list) {
+  const el = $('libList');
+  if (!list.length) { el.innerHTML = '<span class="status">Zatím tu nic není. Vyplň zadání a klikni „Uložit zadání do sdílených".</span>'; return; }
+  el.innerHTML = '';
+  for (const s of list) {
+    const p = s.params || {};
+    const d = document.createElement('div'); d.className = 'set';
+    d.innerHTML = `<div><div><b>${esc(s.title)}</b></div>
+      <div class="meta">${esc(s.author)} · ${new Date(s.created).toLocaleDateString('cs')} · ${p.count} ot. · ${QTYPE_LABEL[p.qtype] || p.qtype} · ${esc(p.difficulty)}${p.source ? ' · se zdrojovým textem' : ''}</div></div>
+      <div><button class="small load">Načíst</button> <button class="small primary go">Vygenerovat</button></div>`;
+    d.querySelector('.load').addEventListener('click', () => { setParams(p); showTab('gen'); $('status').textContent = 'Zadání načteno – klikni „Vygenerovat otázky".'; });
+    d.querySelector('.go').addEventListener('click', async () => {
+      setParams(p); showTab('gen');
+      d.querySelectorAll('button').forEach(b => b.disabled = true);
+      try { await generate(); } finally { d.querySelectorAll('button').forEach(b => b.disabled = false); }
+    });
+    el.appendChild(d);
+  }
+}
+$('refreshLib').addEventListener('click', refreshLibrary);
+$('shareBtn').addEventListener('click', () => {
+  const f = $('shareForm');
+  f.hidden = !f.hidden;
+  if (!f.hidden) {
+    $('shareTitle').value = $('shareTitle').value || $('topic').value.trim();
+    $('shareAuthor').value = store.get('qg_author') || '';
+    $('shareTitle').focus();
+  }
+});
+$('shareSave').addEventListener('click', async () => {
+  const st = $('shareStatus'), p = getParams();
+  if (!p.topic && !p.source) { st.className = 'status err'; st.textContent = 'Vyplň téma nebo zdrojový text.'; return; }
+  st.className = 'status'; st.textContent = 'Ukládám…';
+  store.set('qg_author', $('shareAuthor').value.trim());
+  try {
+    const r = await fetch('/api/prompts', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: $('shareTitle').value, author: $('shareAuthor').value, params: p }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+    $('shareForm').hidden = true; $('shareTitle').value = '';
+    $('status').className = 'status'; $('status').textContent = `Zadání „${data.title}" uloženo do sdílených.`;
+    refreshLibrary();
+  } catch (e) { st.className = 'status err'; st.textContent = 'Chyba: ' + e.message; }
+});
+
+// ---------- režim test ----------
+let answers = [];   // odpověď žáka na každou otázku
+let graded = false;
+
+function startTest() {
+  answers = current.questions.map(() => null); graded = false;
+  $('testTitle').textContent = 'Test: ' + current.title;
+  $('result').hidden = true; $('evalBtn').disabled = false;
+  const out = $('testOut'); out.innerHTML = '';
+  current.questions.forEach((q, i) => {
+    const d = document.createElement('div'); d.className = 'q'; d.dataset.i = i;
+    let html = `<div class="num">Otázka ${i + 1}</div><div class="text">${esc(q.question)}</div>`;
+    if (q.type === 'abcd') {
+      html += (q.options || []).map((o, j) => `<label class="opt"><input type="radio" name="q${i}" value="${'ABCD'[j]}"> <span><b>${'ABCD'[j]})</b> ${esc(o)}</span></label>`).join('');
+    } else if (q.type === 'tf') {
+      html += ['Pravda', 'Nepravda'].map(v => `<label class="opt"><input type="radio" name="q${i}" value="${v}"> <span>${v}</span></label>`).join('');
+    } else {
+      html += `<textarea placeholder="Tvoje odpověď…"></textarea>`;
+    }
+    html += `<div class="verdict"></div><div class="answer"><b>Správně: ${esc(q.answer)}</b>${q.explanation ? `<div class="expl">${esc(q.explanation)}</div>` : ''}</div>`;
+    d.innerHTML = html;
+    d.querySelectorAll('input[type=radio]').forEach(inp => inp.addEventListener('change', () => {
+      if (graded) return;
+      answers[i] = inp.value;
+      d.querySelectorAll('.opt').forEach(o => o.classList.toggle('selected', o.querySelector('input').checked));
+      updateProgress();
+    }));
+    const ta = d.querySelector('textarea');
+    if (ta) ta.addEventListener('input', () => { if (!graded) { answers[i] = ta.value.trim() || null; updateProgress(); } });
+    out.appendChild(d);
+  });
+  updateProgress();
+  showTab('test');
+  window.scrollTo(0, 0);
+}
+function updateProgress() {
+  const done = answers.filter(a => a !== null).length;
+  $('testProgress').textContent = `Zodpovězeno ${done} / ${answers.length}`;
+}
+function evaluate() {
+  if (graded) return;
+  const unanswered = answers.filter(a => a === null).length;
+  if (unanswered && !confirm(`Nezodpovězených otázek: ${unanswered}. Přesto vyhodnotit?`)) return;
+  graded = true; $('evalBtn').disabled = true;
+  let auto = 0, autoTotal = 0, openTotal = 0;
+  const openChecks = [];
+  current.questions.forEach((q, i) => {
+    const d = document.querySelector(`#testOut .q[data-i="${i}"]`);
+    const v = d.querySelector('.verdict');
+    d.classList.add('show', 'graded');
+    d.querySelectorAll('input').forEach(inp => inp.disabled = true);
+    if (q.type === 'abcd' || q.type === 'tf') {
+      autoTotal++;
+      const ok = answers[i] === q.answer;
+      if (ok) auto++;
+      d.classList.add(ok ? 'ok' : 'bad');
+      v.className = 'verdict ' + (ok ? 'ok' : 'bad');
+      v.textContent = ok ? '✔ Správně' : (answers[i] ? '✘ Špatně' : '✘ Bez odpovědi');
+      d.querySelectorAll('.opt').forEach(o => {
+        const val = o.querySelector('input').value;
+        if (val === q.answer) o.classList.add('correct');
+        else if (val === answers[i]) o.classList.add('wrong');
+      });
+    } else {
+      openTotal++;
+      d.querySelector('textarea').disabled = true;
+      v.className = 'verdict';
+      v.innerHTML = `Porovnej se vzorovou odpovědí a označ: <label class="opt" style="display:inline-flex"><input type="checkbox" class="selfok"> <span>Měl/a jsem to správně</span></label>`;
+      const cb = v.querySelector('.selfok');
+      openChecks.push(cb);
+      cb.addEventListener('change', () => { d.classList.toggle('ok', cb.checked); d.classList.toggle('bad', !cb.checked); showScore(); });
+      d.classList.add('bad');
+    }
+  });
+  function showScore() {
+    const selfOk = openChecks.filter(c => c.checked).length;
+    const total = autoTotal + openTotal, score = auto + selfOk;
+    const pct = total ? Math.round(100 * score / total) : 0;
+    $('scoreText').textContent = `Výsledek: ${score} / ${total} (${pct} %)`;
+    $('scoreBar').style.width = pct + '%';
+    $('scoreBar').style.background = pct >= 75 ? 'var(--ok)' : pct >= 50 ? '#f59e0b' : 'var(--err)';
+    $('scoreNote').textContent = openTotal ? `Automaticky: ${auto}/${autoTotal}, otevřené (sebehodnocení): ${selfOk}/${openTotal}.` : '';
+    $('result').hidden = false;
+  }
+  showScore();
+  $('testHead').scrollIntoView({ behavior: 'smooth' });
+}
+$('startTest').addEventListener('click', startTest);
+$('evalBtn').addEventListener('click', evaluate);
+$('restartBtn').addEventListener('click', startTest);
+
+// ---------- start ----------
+providerEl.value = CONFIG.provider in PROVIDERS ? (CONFIG.lockSettings ? CONFIG.provider : (store.get('qg_provider') || CONFIG.provider)) : 'gemini';
+applyProvider();
+if (CONFIG.lockSettings) $('setup').hidden = true;
+detectLibrary();
+</script>
+</body>
+</html>
