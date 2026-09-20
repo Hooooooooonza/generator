@@ -153,6 +153,19 @@
           <textarea id="source" placeholder="Sem můžeš vložit text z učebnice…" style="min-height:80px"></textarea>
         </div>
       </div>
+      <div class="row" style="margin-top:8px">
+        <label style="display:flex; gap:8px; align-items:center; margin:0; font-size:0.9rem; color:var(--text)">
+          Opakování otázek z minulých generování:
+          <select id="repeatMode" style="width:auto">
+            <option value="0">žádné – vše nové</option>
+            <option value="0.25" selected>trochu (~25 %)</option>
+            <option value="0.5">hodně (~50 %)</option>
+            <option value="off">nehlídat</option>
+          </select>
+          <span class="status" id="histInfo"></span>
+        </label>
+        <button class="small" id="histClear" hidden>Zapomenout</button>
+      </div>
       <div class="row">
         <button class="primary" id="gen">Vygenerovat otázky</button>
         <button id="shareBtn" hidden>Uložit zadání do sdílených</button>
@@ -370,7 +383,30 @@ function setParams(p) {
   $('difficulty').value = p.difficulty || 'střední';
   $('extra').value = p.extra || '';
   $('source').value = p.source || '';
+  updateHistInfo();
 }
+
+// Paměť dřívějších otázek ke stejnému zadání (v tomto prohlížeči), aby se neopakovaly.
+const HIST_MAX = 60, HIST_SEND = 40;
+const histKey = p => 'qg_hist_' + hashStr([p.topic, p.qtype, p.source].join('\u0000'));
+function hashStr(str) { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+function getHistory(p) { try { return JSON.parse(store.get(histKey(p)) || '[]'); } catch { return []; } }
+function addHistory(p, qs) {
+  const h = getHistory(p).concat(qs.map(q => String(q.question || '').trim()).filter(Boolean));
+  store.set(histKey(p), JSON.stringify(h.slice(-HIST_MAX)));
+  updateHistInfo();
+}
+function updateHistInfo() {
+  const n = getHistory(getParams()).length;
+  $('histInfo').textContent = n ? `(${n} v paměti)` : '';
+  $('histClear').hidden = !n;
+}
+['topic', 'qtype', 'source'].forEach(id => $(id).addEventListener('input', updateHistInfo));
+$('histClear').addEventListener('click', () => { store.set(histKey(getParams()), '[]'); updateHistInfo(); });
+
+const FOCUS = ['letopočty a data', 'jména osob a jejich role', 'odborné pojmy a jejich význam', 'příčiny a důsledky událostí',
+  'místa a geografii', 'časovou posloupnost událostí', 'méně nápadné detaily z textu', 'srovnání dvou osob nebo událostí'];
+const pick = (arr, n) => arr.slice().sort(() => Math.random() - 0.5).slice(0, n);
 
 function buildPrompt(p) {
   const typeText = {
@@ -388,7 +424,22 @@ Odpověz POUZE validním JSON objektem bez komentářů, ve tvaru:
  {"type":"open","question":"…","answer":"vzorová odpověď","explanation":"…"},
  {"type":"tf","question":"tvrzení…","answer":"Pravda","explanation":"…"}
 ]}
-U "abcd" je "answer" písmeno A–D. Otázky ať jsou věcně správné, jednoznačné a různorodé.`;
+U "abcd" je "answer" písmeno A–D. Otázky ať jsou věcně správné, jednoznačné a různorodé.
+Varianta č. ${Math.floor(Math.random() * 1e6)}: v této variantě zaměř více otázek na ${pick(FOCUS, 2).join(' a ')}.${avoidBlock(p)}`;
+}
+// Opakování je matka moudrosti: část dřívějších otázek se (náhodně vybraná) vrátí, zbytek musí být nový.
+function avoidBlock(p) {
+  const mode = $('repeatMode').value;
+  if (mode === 'off') return '';
+  const h = getHistory(p).slice(-HIST_SEND);
+  if (!h.length) return '';
+  const nRepeat = Math.min(h.length, Math.round(p.count * parseFloat(mode)));
+  const repeat = pick(h, nRepeat);
+  const fresh = h.filter(q => !repeat.includes(q));
+  let out = '';
+  if (repeat.length) out += `\n\nPro upevnění učiva zařaď do sady těchto ${repeat.length} otázek z minula (můžeš je mírně přeformulovat nebo prohodit možnosti, podstata musí zůstat):\n` + repeat.map(q => '- ' + q).join('\n');
+  if (fresh.length) out += `\n\nZbývající otázky musí být NOVÉ – tyto už byly položeny dříve, neopakuj je ani v přeformulované podobě, ptej se na jiná fakta a souvislosti:\n` + fresh.map(q => '- ' + q).join('\n');
+  return out;
 }
 
 const SYSTEM_PROMPT = 'Jsi zkušený učitel a autor testů. Odpovídáš pouze JSON.';
@@ -402,7 +453,7 @@ async function callApi(prompt) {
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: prompt },
     ],
-    temperature: 0.7,
+    temperature: 1.0,
     response_format: { type: 'json_object' },
   };
   const url = cfg.base + '/chat/completions';
@@ -425,7 +476,7 @@ async function callGemini(cfg, prompt) {
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.7, responseMimeType: 'application/json' },
+    generationConfig: { temperature: 1.0, responseMimeType: 'application/json' },
   };
   const url = `${cfg.base}/models/${encodeURIComponent(modelEl.value)}:generateContent`;
   const r = await fetchWithRotation(url, { method: 'POST', body: JSON.stringify(body) });
@@ -462,6 +513,7 @@ async function generate() {
   btn.disabled = true;
   try {
     const qs = parseQuestions(await callApi(buildPrompt(p)));
+    addHistory(p, qs);
     loadSet({ title: p.topic || 'Otázky', questions: qs });
     st.textContent = `Hotovo – ${qs.length} otázek.`;
     return true;
@@ -665,6 +717,7 @@ $('restartBtn').addEventListener('click', startTest);
 providerEl.value = CONFIG.provider in PROVIDERS ? (CONFIG.lockSettings ? CONFIG.provider : (store.get('qg_provider') || CONFIG.provider)) : 'gemini';
 applyProvider();
 if (CONFIG.lockSettings) $('setup').hidden = true;
+updateHistInfo();
 detectLibrary();
 </script>
 </body>
