@@ -111,6 +111,11 @@
         </div>
       </div>
       <div class="hint" id="keyhint"></div>
+      <div class="row" id="classwrap" hidden>
+        <input id="classpw" type="password" placeholder="Heslo třídy" autocomplete="off" style="width:auto">
+        <button id="classUnlock">Odemknout</button>
+        <span class="status" id="classStatus"></span>
+      </div>
       <div class="row">
         <button id="loadModels">Načíst seznam modelů</button>
         <span class="status" id="setupStatus"></span>
@@ -226,20 +231,18 @@
 
 <script>
 // ============================================================
-//  NASTAVENÍ – tady vlož své klíče, když stránku dáváš třídě.
-//  Klíče vložené sem uvidí každý, kdo si otevře zdroják stránky
-//  (je to free tier, takže nejhorší, co se může stát, je vyčerpaný denní limit).
-//  Můžeš jich dát víc (třeba ze 3 Google účtů) – stránka je střídá:
-//  každý návštěvník začne na náhodném klíči, a když dostane 429 (limit),
-//  automaticky zkusí další.
+//  NASTAVENÍ
+//  Na Netlify se klíče berou ze serveru (Environment variables, viz netlify/functions/keys.mjs).
+//  apiKeys vyplň jen když stránku používáš lokálně z disku a nikam ji nenahráváš.
+//  Klíčů může být víc – stránka je střídá: každý návštěvník začne na náhodném,
+//  a když dostane 429 (limit) nebo 401 (neplatný), automaticky zkusí další.
 // ============================================================
 const CONFIG = {
   provider: 'gemini',                 // 'gemini' | 'groq' | 'openrouter'
-  apiKeys: [                          // prázdné = uživatel zadá vlastní klíč
-    'AQ.Ab8RN6JRVBS3lHP_k8skzphWOjp724B6z-4VQmwVbYT4F8LXqw',
-    'AQ.Ab8RN6JSjK9xcWt9d8Qk2XGk_peL3GcEIAmuHDXbDnnevUPY3A',
-    'AQ.Ab8RN6JIaDAD5KTVaq0n91AGvYCsiMoCb39Z6ZZy3ojSCpieIw',
-  ],
+  apiKeys: [],                        // NEDÁVEJ sem klíče, když je stránka na GitHubu/Netlify –
+                                      // skenery uniklých klíčů je najdou a Google je zneplatní.
+                                      // Klíče patří do Netlify → Environment variables (GEMINI_API_KEYS),
+                                      // odkud si je stránka vyzvedne přes /api/keys.
   model: 'gemini-3-flash-preview',    // výchozí model
   lockSettings: false,                // true = skrýt nastavení API úplně (pro žáky)
 };
@@ -280,7 +283,7 @@ const TYPE_LABEL = { abcd: 'výběr', open: 'otevřená', tf: 'pravda/nepravda' 
 const QTYPE_LABEL = { abcd: 'A–D', open: 'otevřené', tf: 'pravda/nepravda', mix: 'mix' };
 
 const providerEl = $('provider'), keyEl = $('apikey'), modelEl = $('model');
-const builtinKeys = CONFIG.apiKeys.map(k => String(k).trim()).filter(Boolean);
+let builtinKeys = CONFIG.apiKeys.map(k => String(k).trim()).filter(Boolean);
 let current = { title: 'Otázky', questions: [] };
 
 // ---------- záložky ----------
@@ -297,7 +300,7 @@ function applyProvider() {
   $('keywrap').hidden = usingBuiltinKeys();
   keyEl.value = store.get('qg_key_' + p) || '';
   $('keyhint').innerHTML = usingBuiltinKeys()
-    ? `Klíč je nastavený přímo ve stránce (${builtinKeys.length} ${builtinKeys.length === 1 ? 'klíč' : 'klíče'}, střídají se automaticky).`
+    ? `Klíč je nastavený správcem stránky (${builtinKeys.length} ${builtinKeys.length === 1 ? 'klíč' : 'klíče'}, střídají se automaticky).`
     : cfg.hint + ' Klíč zůstává jen v tomto prohlížeči (localStorage).';
   const saved = store.get('qg_models_' + p);
   const list = saved ? JSON.parse(saved) : cfg.defaults.slice();
@@ -713,11 +716,40 @@ $('startTest').addEventListener('click', startTest);
 $('evalBtn').addEventListener('click', evaluate);
 $('restartBtn').addEventListener('click', startTest);
 
+// ---------- klíče ze serveru (Netlify env) ----------
+async function loadServerKeys() {
+  if (location.protocol === 'file:') return;
+  const cs = $('classStatus');
+  let r;
+  try {
+    r = await fetch('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: store.get('qg_classpw') || $('classpw').value.trim() }) });
+  } catch { return; }
+  if (r.status === 401) {
+    $('classwrap').hidden = false; $('setup').open = true;
+    cs.className = 'status err'; cs.textContent = store.get('qg_classpw') || $('classpw').value ? 'Špatné heslo.' : 'Zadej heslo třídy.';
+    return;
+  }
+  if (!r.ok) return; // funkce není nasazená nebo chybí GEMINI_API_KEYS – jede se na vlastní klíč
+  const d = await r.json();
+  if (!Array.isArray(d.keys) || !d.keys.length) return;
+  if ($('classpw').value.trim()) store.set('qg_classpw', $('classpw').value.trim());
+  builtinKeys = d.keys;
+  if (d.provider in PROVIDERS) CONFIG.provider = d.provider;
+  if (d.model) CONFIG.model = d.model;
+  providerEl.value = CONFIG.provider;
+  applyProvider();
+  $('classwrap').hidden = true; cs.textContent = '';
+}
+$('classUnlock').addEventListener('click', loadServerKeys);
+$('classpw').addEventListener('keydown', e => { if (e.key === 'Enter') loadServerKeys(); });
+
 // ---------- start ----------
 providerEl.value = CONFIG.provider in PROVIDERS ? (CONFIG.lockSettings ? CONFIG.provider : (store.get('qg_provider') || CONFIG.provider)) : 'gemini';
 applyProvider();
 if (CONFIG.lockSettings) $('setup').hidden = true;
 updateHistInfo();
+loadServerKeys();
 detectLibrary();
 </script>
 </body>
