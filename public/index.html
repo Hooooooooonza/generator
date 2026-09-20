@@ -223,9 +223,9 @@
 const CONFIG = {
   provider: 'gemini',                 // 'gemini' | 'groq' | 'openrouter'
   apiKeys: [                          // prázdné = uživatel zadá vlastní klíč
-    'AQ.Ab8RN6IceIzwAqJLESdwjhAlJzqCfXSBTyRGXh2ZY9x_j9FTeA',
-    'AQ.Ab8RN6I0RRQeqELFQVWjud2euAvRupc9FXtzwE-9yUbp1-2OUQ',
-    'AQ.Ab8RN6I8kGkH-JVvGYZX980ikmDBNKmw2pUPC42z8gsNlvzUpA',
+    'AQ.Ab8RN6JRVBS3lHP_k8skzphWOjp724B6z-4VQmwVbYT4F8LXqw',
+    'AQ.Ab8RN6JSjK9xcWt9d8Qk2XGk_peL3GcEIAmuHDXbDnnevUPY3A',
+    'AQ.Ab8RN6JIaDAD5KTVaq0n91AGvYCsiMoCb39Z6ZZy3ojSCpieIw',
   ],
   model: 'gemini-3-flash-preview',    // výchozí model
   lockSettings: false,                // true = skrýt nastavení API úplně (pro žáky)
@@ -234,9 +234,10 @@ const CONFIG = {
 const PROVIDERS = {
   gemini: {
     name: 'Google Gemini',
-    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    api: 'gemini',                  // nativní Gemini API – nové klíče (AQ.…) jinak nefungují
+    base: 'https://generativelanguage.googleapis.com/v1beta',
     authHeader: 'x-goog-api-key',
-    defaults: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    defaults: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'],
     filter: id => /gemini/.test(id) && !/embedding|tts|image|audio|live|native/.test(id),
     hint: 'Klíč zdarma: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> (free tier ~10 req/min, ~250/den; bez karty).',
   },
@@ -317,14 +318,16 @@ function headersFor(key) {
   return h;
 }
 
-// Provede požadavek; při 429/503 zkusí postupně všechny klíče.
+// Provede požadavek; při 429/503 (limit, přetížení) i 401/403 (neplatný klíč)
+// zkusí postupně všechny klíče.
+const ROTATE_ON = new Set([401, 403, 429, 503]);
 async function fetchWithRotation(url, init) {
   const keys = keyPool();
   let last = null;
   for (let i = 0; i < keys.length; i++) {
     const idx = (keyIdx + i) % keys.length;
     const r = await fetch(url, { ...init, headers: headersFor(keys[idx]) });
-    if (r.status !== 429 && r.status !== 503) { keyIdx = idx; return r; }
+    if (!ROTATE_ON.has(r.status)) { keyIdx = idx; return r; }
     last = r;
     if (keys.length > 1) console.warn(`Klíč #${idx + 1} vrátil ${r.status}, zkouším další…`);
   }
@@ -335,10 +338,13 @@ $('loadModels').addEventListener('click', async () => {
   const p = providerEl.value, cfg = PROVIDERS[p], st = $('setupStatus');
   st.className = 'status'; st.textContent = 'Načítám…';
   try {
-    const r = await fetchWithRotation(cfg.base + '/models', {});
+    const r = await fetchWithRotation(cfg.base + (cfg.api === 'gemini' ? '/models?pageSize=200' : '/models'), {});
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
-    const ids = (data.data || []).map(m => m.id.replace(/^models\//, '')).filter(cfg.filter).sort();
+    const ids = (cfg.api === 'gemini'
+      ? (data.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => m.name.replace(/^models\//, ''))
+      : (data.data || []).map(m => m.id.replace(/^models\//, ''))
+    ).filter(cfg.filter).sort();
     if (!ids.length) throw new Error('Seznam je prázdný.');
     store.set('qg_models_' + p, JSON.stringify(ids));
     fillModels(ids, ids.includes(modelEl.value) ? modelEl.value : (cfg.defaults.find(d => ids.includes(d)) || ids[0]));
@@ -385,12 +391,15 @@ Odpověz POUZE validním JSON objektem bez komentářů, ve tvaru:
 U "abcd" je "answer" písmeno A–D. Otázky ať jsou věcně správné, jednoznačné a různorodé.`;
 }
 
+const SYSTEM_PROMPT = 'Jsi zkušený učitel a autor testů. Odpovídáš pouze JSON.';
+
 async function callApi(prompt) {
   const cfg = PROVIDERS[providerEl.value];
+  if (cfg.api === 'gemini') return callGemini(cfg, prompt);
   const body = {
     model: modelEl.value,
     messages: [
-      { role: 'system', content: 'Jsi zkušený učitel a autor testů. Odpovídáš pouze JSON.' },
+      { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: prompt },
     ],
     temperature: 0.7,
@@ -409,6 +418,26 @@ async function callApi(prompt) {
   }
   const data = await r.json();
   return data.choices?.[0]?.message?.content ?? '';
+}
+
+// nativní Gemini API (generateContent)
+async function callGemini(cfg, prompt) {
+  const body = {
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.7, responseMimeType: 'application/json' },
+  };
+  const url = `${cfg.base}/models/${encodeURIComponent(modelEl.value)}:generateContent`;
+  const r = await fetchWithRotation(url, { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) {
+    const t = await r.text();
+    if (r.status === 429) throw new Error(`Překročen limit požadavků (429)${keyPool().length > 1 ? ' u všech klíčů' : ''}. Chvíli počkej nebo zkus jiný model.\n` + t.slice(0, 300));
+    throw new Error(`HTTP ${r.status}: ${t.slice(0, 500)}`);
+  }
+  const data = await r.json();
+  const cand = data.candidates?.[0];
+  if (!cand?.content?.parts) throw new Error('Model nevrátil odpověď' + (data.promptFeedback?.blockReason ? ` (blokováno: ${data.promptFeedback.blockReason})` : '') + '.');
+  return cand.content.parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
 }
 
 function parseQuestions(text) {
